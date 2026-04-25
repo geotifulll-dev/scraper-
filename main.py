@@ -1,121 +1,215 @@
 import requests
-from bs4 import BeautifulSoup
 import csv
-import time
-
-BASE_URL = "https://www.autowini.com"
-SEARCH_URL = "https://www.autowini.com/search/items?itemType=cars&condition=C020"
+import json
+import re
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://www.autowini.com/search/items?itemType=cars&condition=C020",
 }
 
-def scrape_page(page_num):
-    """ერთი გვერდის scrape"""
-    url = f"{SEARCH_URL}&pageOffset={page_num}"
-    print(f"📄 Scraping page {page_num}: {url}")
+BASE_URL = "https://www.autowini.com"
+
+
+def try_api():
+    """API endpoint-ების ცდა"""
     
-    response = requests.get(url, headers=HEADERS)
+    # შესაძლო API endpoints
+    api_urls = [
+        "https://www.autowini.com/api/v2/search/items?itemType=cars&condition=C020&pageOffset=1&pageSize=40",
+        "https://www.autowini.com/api/search/items?itemType=cars&condition=C020&pageOffset=1",
+        "https://api.autowini.com/v2/search/items?itemType=cars&condition=C020",
+    ]
     
-    if response.status_code != 200:
-        print(f"❌ Error: Status {response.status_code}")
-        return []
+    for url in api_urls:
+        print(f"🔍 Trying: {url}")
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                print(f"✅ API works! Status: {resp.status_code}")
+                return data
+        except Exception as e:
+            print(f"   ❌ {e}")
+    return None
+
+
+def try_html_parse():
+    """HTML-დან ჩაშენებული JSON-ის ამოღება"""
+    url = "https://www.autowini.com/search/items?itemType=cars&condition=C020"
+    print(f"\n📄 Fetching HTML: {url}")
     
-    soup = BeautifulSoup(response.text, "html.parser")
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+    print(f"   Status: {resp.status_code}")
+    print(f"   HTML length: {len(resp.text)}")
     
-    # მანქანების ლინკების პოვნა
-    car_links = soup.find_all("a", href=True)
+    html = resp.text
+    
+    # __NEXT_DATA__ ან სხვა script tags
+    patterns = [
+        r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+        r'window\.__INITIAL_STATE__\s*=\s*({.*?});',
+        r'window\.__DATA__\s*=\s*({.*?});',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, html, re.DOTALL)
+        if match:
+            print(f"✅ Found embedded data with pattern!")
+            try:
+                data = json.loads(match.group(1))
+                return data
+            except:
+                print("   ⚠️ Could not parse JSON")
+    
+    # Debug: პირველი 2000 სიმბოლო
+    print("\n--- HTML Preview (first 2000 chars) ---")
+    print(html[:2000])
+    print("--- End Preview ---\n")
+    
+    return None
+
+
+def parse_api_data(data):
+    """API response-დან მანქანების ამოღება"""
     cars = []
     
-    for link in car_links:
-        href = link.get("href", "")
-        if not href.startswith("/items/Used-"):
-            continue
+    # სხვადასხვა JSON structure-ის ცდა
+    items = []
+    
+    if isinstance(data, dict):
+        # შესაძლო keys
+        for key in ["items", "data", "result", "results", "content", "list", "carList"]:
+            if key in data:
+                items = data[key]
+                print(f"📦 Found items in key: '{key}' ({len(items)} items)")
+                break
         
-        car = {}
+        # nested
+        if not items and "data" in data and isinstance(data["data"], dict):
+            for key in ["items", "list", "results"]:
+                if key in data["data"]:
+                    items = data["data"][key]
+                    print(f"📦 Found items in data.{key} ({len(items)} items)")
+                    break
+    
+    if not items:
+        print("⚠️ Could not find items in response")
+        print(f"   Keys: {list(data.keys()) if isinstance(data, dict) else 'not a dict'}")
+        return []
+    
+    for item in items:
+        car = {
+            "title": "",
+            "price_usd": "",
+            "details": "",
+            "location": "",
+            "url": "",
+            "image": "",
+            "year": "",
+            "mileage": "",
+        }
         
-        # ლინკი
-        car["url"] = BASE_URL + href
-        
-        # სათაური (h3)
-        h3 = link.find("h3")
-        if h3:
-            # N ნიშნის გარეშე
-            title_text = h3.get_text(strip=True)
-            car["title"] = title_text.replace("N", "").strip()
-        else:
-            car["title"] = "N/A"
-        
-        # დეტალები (p tag ინფო მისამართით)
-        p_tag = link.find("p")
-        if p_tag:
-            car["details"] = p_tag.get_text(strip=True)
-        else:
-            car["details"] = "N/A"
-        
-        # ფასი (exchanged-price)
-        price_el = link.find("exchanged-price")
-        if price_el:
-            car["price_usd"] = price_el.get("price", "N/A")
-        else:
-            # alt: სხვა ფასის პოვნა
-            price_div = link.find("div", class_="css-19fxa0g")
-            if price_div:
-                car["price_usd"] = price_div.get_text(strip=True).replace("$", "").strip()
-            else:
-                car["price_usd"] = "N/A"
-        
-        # სურათი
-        img = link.find("img", class_="css-k7hb9y")
-        if img:
-            car["image"] = img.get("src", "N/A")
-        else:
-            car["image"] = "N/A"
-        
-        # ადგილმდებარეობა
-        location_span = link.find("span", string=lambda t: t and ("Korea" in t or "Japan" in t or "UAE" in t) if t else False)
-        if location_span:
-            car["location"] = location_span.get_text(strip=True)
-        else:
-            car["location"] = "N/A"
-        
-        # Wishlist count
-        wish = link.find("span", class_="css-13xkcs5")
-        if wish:
-            car["wishlist"] = wish.get_text(strip=True)
-        else:
-            car["wishlist"] = "0"
+        # ყველა key-ს ვამოწმებ
+        if isinstance(item, dict):
+            # title
+            for k in ["title", "itemName", "name", "itemNm", "goodsNm"]:
+                if k in item and item[k]:
+                    car["title"] = str(item[k])
+                    break
+            
+            # price
+            for k in ["price", "exchangePrice", "exchangedPrice", "itemPrice", "amt"]:
+                if k in item and item[k]:
+                    car["price_usd"] = str(item[k])
+                    break
+            
+            # url
+            for k in ["itemUrl", "url", "detailUrl", "link"]:
+                if k in item and item[k]:
+                    car["url"] = str(item[k])
+                    break
+            
+            # image
+            for k in ["thumbnail", "thumbnailUrl", "imageUrl", "imgUrl", "img"]:
+                if k in item and item[k]:
+                    car["image"] = str(item[k])
+                    break
+            
+            # year
+            for k in ["year", "modelYear", "yearNm"]:
+                if k in item and item[k]:
+                    car["year"] = str(item[k])
+                    break
+            
+            # mileage
+            for k in ["mileage", "mile", "mileageKm"]:
+                if k in item and item[k]:
+                    car["mileage"] = str(item[k])
+                    break
+            
+            # details
+            for k in ["description", "summary", "itemDesc"]:
+                if k in item and item[k]:
+                    car["details"] = str(item[k])[:200]
+                    break
+            
+            # თუ URL არ აქვს, construct
+            if not car["url"] and "itemId" in item:
+                car["url"] = f"{BASE_URL}/items/{item['itemId']}"
+            
+            # ყველა key debug-ისთვის
+            print(f"   🔑 Keys: {list(item.keys())[:10]}")
         
         cars.append(car)
     
-    print(f"   ✅ Found {len(cars)} cars")
     return cars
 
 
+def save_csv(cars, filename="autowini_cars.csv"):
+    """CSV-ში შენახვა"""
+    if not cars:
+        print("❌ No cars to save")
+        return
+    
+    fieldnames = list(cars[0].keys())
+    
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(cars)
+    
+    print(f"\n🎉 Saved {len(cars)} cars to {filename}")
+
+
 def main():
-    all_cars = []
+    print("=" * 50)
+    print("🚗 AutoWin Scraper")
+    print("=" * 50)
     
-    # რამდენი გვერდი გინდა scrape
-    PAGES = 3  # შეცვალე რამდენიც გინდა
+    # მეთოდი 1: API
+    print("\n--- Method 1: API ---")
+    api_data = try_api()
+    if api_data:
+        cars = parse_api_data(api_data)
+        if cars:
+            save_csv(cars)
+            return
     
-    for page in range(1, PAGES + 1):
-        cars = scrape_page(page)
-        all_cars.extend(cars)
-        time.sleep(2)  # rate limit-ის თავიდან აცილება
+    # მეთოდი 2: HTML parsing
+    print("\n--- Method 2: HTML Parse ---")
+    html_data = try_html_parse()
+    if html_data:
+        cars = parse_api_data(html_data)
+        if cars:
+            save_csv(cars)
+            return
     
-    # CSV-ში შენახვა
-    if all_cars:
-        filename = "autowini_cars.csv"
-        with open(filename, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["title", "price_usd", "details", "location", "url", "image", "wishlist"])
-            writer.writeheader()
-            writer.writerows(all_cars)
-        
-        print(f"\n🎉 Done! {len(all_cars)} cars saved to {filename}")
-    else:
-        print("\n❌ No cars found!")
+    # Debug output
+    print("\n❌ Could not extract car data")
+    print("💡 Debug info saved for analysis")
 
 
 if __name__ == "__main__":
