@@ -1,131 +1,164 @@
 import json
 import csv
 import time
-import re
 from curl_cffi import requests as c_req
 from bs4 import BeautifulSoup
 
-# იყენებს ქრომის საუკეთესო 헤დერებს დამატებული 1:1 სერვერის მოთხოვნებთან
-HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1"
-}
-
-def dict_flatten(d, parent_key='', sep='_'):
-    # დაფშვნის კომპლექსურ ველებს ერთიანი ცხრილისთვის!
+def flatten_dict(d, parent_key='', sep='_'):
+    # რთული API/NEXT ველების ჩაშლა excel-ისთვის
     items =[]
     if not isinstance(d, dict): return {parent_key: d}
     for k, v in d.items():
         new_key = f"{parent_key}{sep}{k}" if parent_key else k
         if isinstance(v, dict):
-            items.extend(dict_flatten(v, new_key, sep=sep).items())
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
         elif isinstance(v, list):
-            items.append((new_key, " | ".join([str(i) for i in v if not isinstance(i, (dict, list))])))
+            # ლისტი გროვდება 1 უჯრაში მარტივი გამოსაყოფით ( | )
+            str_list =[str(i) for i in v if not isinstance(i, (dict, list))]
+            if str_list:
+                items.append((new_key, " | ".join(str_list)))
         else:
             items.append((new_key, v))
     return dict(items)
 
-def extract_target_car(node):
-    # იდუმალი სნიფერი რომელიც 5 მეგაბაიტიანი Next_js Json-იდან საგულდაგულოდ აპარებს მხოლოდ მთავარ მანქანის ბაზას:
+def auto_find_list(node):
+    # პოულობს მანქანების Array სიას პირველი ეტაპისთვის
+    if isinstance(node, list): return node
     if isinstance(node, dict):
-        # უნიკალური ნიშნულები რაც მხოლოდ მთავარ დოკუმენტს გააჩნია..
-        if "itemCd" in node and ("makerNm" in node or "makeNm" in node or "modelNm" in node):
+        for val in node.values():
+            found = auto_find_list(val)
+            if found: return found
+    return[]
+
+def extract_target_car(node, target_id):
+    # დეტალებში სქელი ჯეისონიდან ფილტრავს სწორედ იმას, რომელიც გვირჩევნია!
+    if isinstance(node, dict):
+        # ხანდახან დეტალურ გვერდზე 10 მსგავსი მანქანაა მოცემული "Similar Items" ბლოკში 
+        if node.get("itemCd") == target_id:
             return node
         for val in node.values():
-            result = extract_target_car(val)
+            result = extract_target_car(val, target_id)
             if result: return result
     elif isinstance(node, list):
         for item in node:
-            result = extract_target_car(item)
+            result = extract_target_car(item, target_id)
             if result: return result
     return {}
 
 
 def main():
     print("🔥-----------------------------------------------🔥")
-    print("      DEEP CRAWLER: LISTING -> DETAIL INFO       ")
+    print(" 🚀 V2-API ➜ HYBRID DEEP CRAWLER: LIST -> DETAIL ")
     print("🔥-----------------------------------------------🔥")
 
-    MAX_PAGES = 2
-    full_database = []
-    
-    # [ფაზა 1] – ყველა მანქანის გვერდის ლინკების მოძიება სერჩში:
+    API_HEADERS = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36",
+        "Referer": "https://m.autowini.com/",
+        "Origin": "https://m.autowini.com",
+        "wini-code-select-country": "C0610"
+    }
+
+    DETAIL_HEADERS = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Upgrade-Insecure-Requests": "1"
+    }
+
+    MAX_PAGES = 2 
+    final_dataset = []
+
+    # [STEP 1] -> გვერდების ამოკითხვა სერვერული V2API საშუალებით
     for page in range(1, MAX_PAGES + 1):
-        list_url = f"https://www.autowini.com/search/items?itemType=cars&condition=C020&pageOffset={page}"
-        print(f"\n[➡] [STEP 1] ფურცელ #{page}-ის გადამოწმება... -> {list_url}")
+        list_url = f"https://v2api.autowini.com/items/cars?pageOffset={page}&pageSize=30&condition=C020"
+        print(f"\n[➡] [STEP 1] ვეცნობი მთავარი V2API-ს სიას - ფურცელი #{page}")
         
         try:
-            resp = c_req.get(list_url, headers=HEADERS, impersonate="chrome120", timeout=30)
+            # აქ API 100%-ით კარგად გადის მობილურის fake ჰედერთან ერთად 
+            resp = c_req.get(list_url, headers=API_HEADERS, impersonate="safari_ios", timeout=20)
             if resp.status_code != 200:
-                print(f"[-] ERROR HTTP: {resp.status_code}")
+                print(f"[-] DataCenter-მა API კავშირიც დაბლოკა (Status {resp.status_code}).")
                 continue
-                
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            # ლინკები (კლონების წაშლით -> set()):
-            all_a_tags = soup.find_all("a", href=re.compile(r"/items/(?:Used|New)-"))
-            unique_links = list(set([a.get("href") for a in all_a_tags]))
+
+            raw_cars = auto_find_list(resp.json())
             
-            if not unique_links:
-                print("[-] ბმულები ვერ ვიპოვე HTML სერჩზე, გადავდივარ...")
+            if not raw_cars:
+                print(f"[-] ამ API გვერდზე ლისტი ცარიელია.")
                 continue
-            
-            print(f"[+] აღმოჩენილია მანქანის {len(unique_links)} გვერდი, ვიწყებ სათითაოდ შესვლას (Step 2)...\n")
-            
-            # [ფაზა 2] – სათითაოდ ლინკზე შეცლა და ინფორმაციის კოპირება
-            for index, link_endpoint in enumerate(unique_links, start=1):
-                car_detail_link = "https://www.autowini.com" + link_endpoint
-                print(f"    --> შევდივარ[{index}/{len(unique_links)}] : {car_detail_link}")
+
+            print(f"[✔] აღმოჩენილია {len(raw_cars)} ძირითადი ობიექტი! ➜ იწყება დეტალიზაცია სათითაოდ:")
+
+            #[STEP 2] სათითაოდ გავლის ციკლი ნაპოვნ ID-ებზე:
+            for idx, raw_car_info in enumerate(raw_cars, 1):
+                car_id = raw_car_info.get("itemCd")
                 
-                detail_resp = c_req.get(car_detail_link, headers=HEADERS, impersonate="chrome120", timeout=30)
-                if detail_resp.status_code == 200:
-                    detail_soup = BeautifulSoup(detail_resp.text, 'html.parser')
-                    next_script = detail_soup.find("script", id="__NEXT_DATA__")
-                    
-                    if next_script:
-                        try:
-                            car_mega_json = json.loads(next_script.string)
-                            car_precise_dict = extract_target_car(car_mega_json)
-                            
-                            if car_precise_dict:
-                                flat_item = dict_flatten(car_precise_dict)
-                                flat_item["LINK_CRAWLED"] = car_detail_link # ვინახავთ წყაროს!
-                                full_database.append(flat_item)
-                                print(f"      [✔] წარმატება! VIN/Price/ID ამოღებულია და ცხრილში მოთავსდა!")
-                            else:
-                                print(f"      [?] მონაცემთა ნაკრებში `itemCd` ან `მოდელი` არ მოიძებნა!")
-                                
-                        except json.JSONDecodeError:
-                            print(f"      [x] JSON ფორმატმა ერორი ამოაგდო.")
-                    else:
-                        print(f"      [x] ვერ მოიძებნა ფარული <NEXT_DATA> საწყობი.")
+                # დავიცვათ მანქანა ლოგიკურად! 
+                base_flatten = flatten_dict(raw_car_info)
+                if not car_id:
+                    # თუ ID არ ჩანს რაიმე ერორის გამო, მაინც პირველადი API ინფო გროვდება!
+                    final_dataset.append(base_flatten) 
+                    continue
+
+                car_detail_link = f"https://www.autowini.com/items/Used-{car_id}"
+                print(f"    --> იჩხრიკება [{idx}/{len(raw_cars)}] : ID-{car_id}")
+                
+                try:
+                    # ფარულად ჩაძვრომა კონკრეტული ავტომობილის დეტალების ტექსტებში
+                    detail_resp = c_req.get(car_detail_link, headers=DETAIL_HEADERS, impersonate="chrome120", timeout=15)
+                    deep_info_found = False
+
+                    if detail_resp.status_code == 200:
+                        detail_soup = BeautifulSoup(detail_resp.text, 'html.parser')
+                        next_script = detail_soup.find("script", id="__NEXT_DATA__")
                         
-                else:
-                    print(f"      [!] მოხდა კავშირის ვარდნა! {detail_resp.status_code}")
-                
-                time.sleep(1)  # ბალანსი სერვერთან
-                
-        except Exception as big_e:
-            print(f"[CRASH] ციკლის გარეთ ერორი გამოხტა! -> {big_e}")
+                        if next_script:
+                            mega_json = json.loads(next_script.string)
+                            exact_detail = extract_target_car(mega_json, car_id)
+                            
+                            if exact_detail:
+                                # თუ მივიღეთ სრული ინფორმაცია, ძველი ფასი/ლისტს წაშლის და დააწერს აბსოლუტურად ყველაფერს
+                                rich_car = flatten_dict(exact_detail)
+                                rich_car["LINK"] = car_detail_link
+                                final_dataset.append(rich_car)
+                                print(f"      [⭐⭐⭐] წარმატება! სრულყოფილი NEXT მონაცემი დაუკავშირდა!")
+                                deep_info_found = True
+
+                    # ----------------- FAIL-SAFE LOGIC --------------------
+                    if not deep_info_found:
+                        print(f"      [~] დაცვის მექანიზმით მხოლოდ API მონაცემით შეივსო! (Deep Details Failed)")
+                        base_flatten["LINK"] = car_detail_link
+                        final_dataset.append(base_flatten)
+
+                except Exception as loop_e:
+                    print(f"[x] პატარა Timeout/ერორი მანქანაზე. (ვინახავ Base ინფორმაციას) - {loop_e}")
+                    base_flatten["LINK"] = f"https://www.autowini.com/items/Used-{car_id}"
+                    final_dataset.append(base_flatten)
+
+                # სერვერზე არ ვაწვებით ძალიან, მანქანიდან-მანქანამდე თვლემს
+                time.sleep(1)  
+
+        except Exception as api_err:
+            print(f"[!] მთავარი გვერდის API ERROR: {api_err}")
 
 
-    # [ფაზა 3] – CSV გადაბმვა და სვეტებად შედუღება!
-    print("------------------------------------------")
-    if full_database:
-        all_columns = set()
-        for d in full_database:
-            all_columns.update(d.keys())
-        col_list = sorted(list(all_columns))
+    # [STEP 3] ამოწეროს ყველაფერი
+    print("\n------------------------------------------")
+    if final_dataset:
+        cols_set = set()
+        for i in final_dataset:
+            cols_set.update(i.keys())
+        all_cols = sorted(list(cols_set))
 
-        with open("Extracted_Mega_Database.csv", "w", newline="", encoding="utf-8-sig") as fs:
-            writer = csv.DictWriter(fs, fieldnames=col_list)
-            writer.writeheader()
-            writer.writerows(full_database)
-            
-        print(f"[⭐⭐⭐] ვოა-ლა!! დასკრაპილია სულ: {len(full_database)} ინდივიდუალური ავტო-მანქანა, და აკრეფილია უამრავი სვეტი!")
+        with open("Cars_Ultimate_Data.csv", "w", newline="", encoding="utf-8-sig") as csv_file:
+            wr = csv.DictWriter(csv_file, fieldnames=all_cols)
+            wr.writeheader()
+            wr.writerows(final_dataset)
+        print(f"[#] შესანიშნავია! სრული პროცესი დასრულდა: {len(final_dataset)} ერთეული მყარად ჩაწერილია!")
     else:
-        print("[!] ოპერაცია გაუქმდა მონაცემთა ცარიელობის გამო (შეიძლება დაიბლოკა ან ლინკები დაიმალა)")
+        print("[!] ლისტი აბსოლუტურად ცარიელია.")
+
 
 if __name__ == "__main__":
     main()
