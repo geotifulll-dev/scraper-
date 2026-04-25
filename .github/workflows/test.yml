@@ -1,4 +1,4 @@
-name: Ultimate Backend Scraper (API)
+name: Ultimate Mobile App Scraper
 
 on:
   push:
@@ -13,26 +13,27 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         
-      - name: Env Python 3.10
+      - name: Python Environment Load
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
           
-      - name: Core Library Load
+      - name: Requirements Bypass Tool
         run: |
           python -m pip install --upgrade pip
-          pip install curl_cffi
+          pip install curl_cffi requests
           
-      - name: RUN Main Fetch API Code
+      - name: Mobile API Engine Start!
         run: python main.py
           
-      - name: Save Excel CSV & DB
+      - name: Save Mobile App Extractions!
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ultimate-Autowini-Database
+          name: MOBILE-DATABASE
           path: |
             *.csv
             *.json
             *.txt
+            *.html
