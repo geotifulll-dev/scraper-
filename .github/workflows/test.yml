@@ -19,19 +19,19 @@ jobs:
           python-version: '3.10'
           cache: 'pip'
           
-      - name: Install Bypass and Scraping libraries
+      - name: Install Bypass Libraries (ყველაზე მთავარი!)
         run: |
           python -m pip install --upgrade pip
           pip install beautifulsoup4 curl_cffi
           
-      - name: Start Scraping Main
+      - name: Start Scraping Script
         run: python main.py
           
-      - name: Save Data & Debug info
+      - name: Upload Finished Files
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Autowini-Data
+          name: Autowini-Export-CSV
           path: |
             results.csv
             debug_html.txt
