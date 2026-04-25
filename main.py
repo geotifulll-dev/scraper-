@@ -13,9 +13,13 @@ HEADERS = {
 def fetch_html():
     url = "https://www.autowini.com/search/items?itemType=cars&condition=C020"
     print(f"Fetching: {url}")
-    resp = requests.get(url, headers=HEADERS, timeout=15)
-    print(f"Status: {resp.status_code}, Length: {len(resp.text)}")
-    return resp.text
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        print(f"Status: {resp.status_code}, Length: {len(resp.text)}")
+        return resp.text
+    except Exception as e:
+        print(f"Error fetching URL: {e}")
+        return ""
 
 def extract_next_data(html):
     match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
@@ -26,7 +30,7 @@ def extract_next_data(html):
 
 def extract_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
-    cars = []
+    cars =[]
     links = soup.find_all("a", href=re.compile(r"/items/Used-"))
     print(f"Found {len(links)} car links")
     
@@ -46,7 +50,7 @@ def extract_from_html(html):
         cars.append(car)
     return cars
 
-def save_csv(cars, filename="autowini_cars.csv"):
+def save_csv(cars, filename="results.csv"):
     if not cars:
         print("No cars found!")
         return
@@ -58,10 +62,14 @@ def save_csv(cars, filename="autowini_cars.csv"):
 
 def main():
     print("=" * 50)
-    print("AutoWin Scraper")
+    print("AutoWin Scraper Starting...")
     print("=" * 50)
     
     html = fetch_html()
+    
+    if not html:
+        print("Failed to get HTML content.")
+        return
     
     data = extract_next_data(html)
     if data:
@@ -71,14 +79,14 @@ def main():
     
     cars = extract_from_html(html)
     if cars:
-        print(f"First car: {cars[0]}")
+        print(f"First car found: {cars[0]['title']} - {cars[0]['price']}")
         save_csv(cars)
     else:
-        print("No cars in HTML")
+        print("No cars in HTML. Check debug_html.txt")
         with open("debug_html.txt", "w") as f:
             f.write(html[:5000])
     
-    print("Done!")
+    print("Scraping Completed!")
 
 if __name__ == "__main__":
     main()
