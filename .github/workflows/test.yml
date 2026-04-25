@@ -1,34 +1,33 @@
-name: Autowini Scraper
+name: Run Scraper
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v3
+      
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
-
+          python-version: '3.10'
+          
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
+        run: pip install requests beautifulsoup4
+          
       - name: Run scraper
         run: python main.py
-
-      - name: Check output file
-        run: |
-          ls -la
-          test -f autowini_cars.csv
-
-      - name: Upload CSV
-        uses: actions/upload-artifact@v4
+          
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v3
         with:
-          name: autowini-cars
-          path: autowini_cars.csv
+          name: scraper-results
+          path: |
+            autowini_cars.csv
+            debug_data.json
+            debug_html.txt
