@@ -2,7 +2,8 @@ import csv
 import time
 import re
 from bs4 import BeautifulSoup
-from curl_cffi import requests # აქ ჩვეულებრივი requests შევცვალეთ ბრაუზერის იმიტატორით!
+# !! requests ბიბლიოთეკას ვცვლით სპეციალური chrome ბიბლიოთეკით
+from curl_cffi import requests
 
 def get_page_url(page):
     if page == 1:
@@ -67,50 +68,51 @@ def save_to_csv(cars, filename="results.csv"):
         writer = csv.DictWriter(f, fieldnames=cars[0].keys())
         writer.writeheader()
         writer.writerows(cars)
-    print(f"==> წარმატებით შეინახა {len(cars)} მანქანა ფაილში: {filename}")
+    print(f"✅ წამოიღო და ჩაიწერა სულ: {len(cars)} მანქანა.")
 
 def main():
-    print("=" * 50)
-    print("Autowini მოწინავე სკრაპერი (Bypass Block)...")
-    print("=" * 50)
+    print("🔥" * 20)
+    print("!!! ეშვება BYPASS-VER-02 ბოლო მეთოდი ქრომის ემულატორით !!!")
+    print("🔥" * 20)
     
-    # 2 გვერდს იღებს ერთ ჯერზე
     MAX_PAGES = 2 
     all_extracted_cars =[]
     
     for page in range(1, MAX_PAGES + 1):
         target_url = get_page_url(page)
-        print(f"[\u2193] ვსტუმრობ გვერდს: {target_url}")
+        print(f"[\u2193] ვამოწმებ გვერდს #{page}...")
         
         try:
-            # მთავარი "ჯადოქრობა", ატყუებს Autowini-ს რომ ჩვეულებრივი ქრომით შევდივართ კომპიუტერიდან:
-            resp = requests.get(target_url, impersonate="chrome110", timeout=30)
+            # მთავარი მომენტი (ანტი-ბოტ საწინააღმდეგო იმპერსონაცია Chrome ვერსია 120-ის იმიტირებით)
+            resp = requests.get(target_url, impersonate="chrome120", timeout=30)
             
-            if resp.status_code == 403:
-                print(f"[-] საიტმა მაინც დაგვბლოკა, ვინახავ error კოდს debug_html.txt -ში")
+            if resp.status_code != 200:
+                print(f"[-] საიტმა კვლავ დაბლოკა, დააბრუნა კოდი: {resp.status_code}")
                 with open("debug_html.txt", "w", encoding="utf-8") as f:
-                    f.write(resp.text)
+                    f.write(resp.text[:5000])
                 break
                 
             page_cars = extract_cars_from_html(resp.text)
-            print(f"[+] ამოღებულია: {len(page_cars)} მანქანა.")
+            print(f"[+] გვერდზე იპოვნა: {len(page_cars)} ცალი მანქანა")
             
             if not page_cars:
+                with open("debug_html.txt", "w", encoding="utf-8") as f:
+                    f.write(resp.text[:5000])
                 break
                 
             all_extracted_cars.extend(page_cars)
-            time.sleep(2) 
+            time.sleep(3) 
             
         except Exception as e:
-            print(f"[!] მოხდა შეცდომა კავშირისას: {e}")
+            print(f"[!] შეცდომა: {e}")
             break
 
     print("=" * 50)
     if all_extracted_cars:
-        print(f"[#] სულ შეგროვდა {len(all_extracted_cars)} ჩანაწერი.")
+        print(f"[#] მისია შესრულებულია! სრული რაოდენობა: {len(all_extracted_cars)} ჩანაწერი.")
         save_to_csv(all_extracted_cars, "results.csv")
     else:
-        print("ჩანაწერები ვერ მოიძებნა. დაასრულა მუშაობა.")
+        print("ინფორმაცია ვერსაიდან ვერ მოგროვდა.")
 
 if __name__ == "__main__":
     main()
