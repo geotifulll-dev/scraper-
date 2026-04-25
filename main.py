@@ -1,118 +1,102 @@
-import csv
 import json
+import csv
 import time
-from curl_cffi import requests
+from curl_cffi import requests as c_req
 
-# ის header-ები (პასპორტები) 1:1, რომლებიც შენ თვითონ გადმოიწერე ქრომის API Network-იდან. 
-# ასე შენი კოდი ოფიციალურ Chrome ბრაუზერს დაემსგავსა!
-HEADERS = {
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9,de;q=0.8,tr;q=0.7",
-    "Origin": "https://www.autowini.com",
-    "Referer": "https://www.autowini.com/",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OPR/129.0.0.0",
-    "wini-code-select-country": "C0610",
-    "Connection": "keep-alive"
-}
-
-def dict_flatten(dict_obj, separator='_', prefix=''):
-    """საიდუმლო ფუნქცია: თუ API სერვერმა რთული JSON მოგვცა თავისი სუბ-კატეგორიებით 
-    (მაგ: price: {base: 600, exchange: 400}), ეს კოდი აქცევს price_base და price_exchange ფორმატში, 
-    რომ პირდაპირ Excel ცხრილში დაეტევეს და ინფორმაცია არ დავკარგოთ!"""
-    if not isinstance(dict_obj, dict):
-        return {prefix: dict_obj}
-        
-    flat_dictionary = {}
-    for key, value in dict_obj.items():
-        new_key = f"{prefix}{separator}{key}" if prefix else key
-        if isinstance(value, dict):
-            flat_dictionary.update(dict_flatten(value, separator, new_key))
-        elif isinstance(value, list):
-            flat_dictionary[new_key] = str(value)
+def flatten_dict(d, parent_key='', sep='_'):
+    # რთული json ბაზის CSV ცხრილში 1:1 ზე გადმოსაწყობი
+    items =[]
+    if not isinstance(d, dict): return {}
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+        elif isinstance(v, list):
+            items.append((new_key, " / ".join([str(i) for i in v])))
         else:
-            flat_dictionary[new_key] = value
-    return flat_dictionary
+            items.append((new_key, v))
+    return dict(items)
 
-def search_main_list(data_chunk):
-    """საიდუმლო ლოგიკა #2: ჩვენ არ ვიცით რა დაარქვეს სერვერზე 'მანქანების სიას', (Cars? Items? data?), 
-    ამიტომ ეს ლოგიკა თვითონ ეძებს JSON შიგნეულობაში [List] საცავს (საიდანაც ინფორმაციაა)"""
-    if isinstance(data_chunk, list) and len(data_chunk) > 0 and isinstance(data_chunk[0], dict):
-        return data_chunk
-    if isinstance(data_chunk, dict):
-        for val in data_chunk.values():
-            found = search_main_list(val)
+def auto_find_list(node):
+    # ეძებს თუ რა დაარქვეს ფარულ მონაცემებს (cars, data..).
+    if isinstance(node, list): return node
+    if isinstance(node, dict):
+        for val in node.values():
+            found = auto_find_list(val)
             if found: return found
     return[]
 
-
 def main():
-    print("🔥===========================================🔥")
-    print("API ბაზაზე (ბექ-ენდ) შეერთება წამოწყებულია!!!")
-    print("🔥===========================================🔥")
+    print("🔥-----------------------------------------------🔥")
+    print("      APP / API EXTRACTOR გაშვებულია!      ")
+    print("🔥-----------------------------------------------🔥")
     
-    # ამოვიღოთ 2 გვერდის ინფორმაცია (თითო 30 მანქანაა ლინკზე მითითებული). შეიცვლება მარტივად..
+    # გაძლიერებული აპლიკაციის (App) Fake პროფილი
+    HEADERS = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
+        # ვაყალბებთ App მობილური კლიენტის იმიტაციას:
+        "User-Agent": "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36",
+        "Referer": "https://m.autowini.com/",
+        "Origin": "https://m.autowini.com",
+        "wini-code-select-country": "C0610"
+    }
+
+    all_cars_database =[]
     MAX_PAGES = 2 
-    database =[]
     
-    for current_page in range(1, MAX_PAGES + 1):
-        # ეს ის ოფიციალური API საიდუმლო ლინკია რომელიც მიაგენი:
-        api_link = f"https://v2api.autowini.com/items/cars?pageOffset={current_page}&pageSize=30&condition=C020"
-        
-        print(f"[⬇] ჩამოგვაქვს გვერდი {current_page} პირდაპირ სერვერიდან ...")
+    for page in range(1, MAX_PAGES + 1):
+        target_api = f"https://v2api.autowini.com/items/cars?pageOffset={page}&pageSize=30&condition=C020"
+        print(f"[\u2193] უკავშირდება Backend სერვერს: გვერდი {page}...")
         
         try:
-            # ქრომის ინდიკაცია impersonate-ით.
-            req = requests.get(api_link, headers=HEADERS, impersonate="chrome120", timeout=25)
+            # ქრომის ყველაზე დაბალი შანსის დაბლოკვის მობილურის ვარიანტი: safari_ios!
+            response = c_req.get(target_api, headers=HEADERS, impersonate="safari_ios", timeout=25)
+            print(f"[STATUS] ސ API დაგვიბრუნა სტატუსი: {response.status_code}")
             
-            if req.status_code != 200:
-                print(f"[-] ვუი! API-მ სტატუსი {req.status_code} დაგვიბრუნა. ველოდებით HTML პასუხს ბექაფში.")
-                with open(f"fail_page_{current_page}.html", "w", encoding="utf-8") as file:
-                    file.write(req.text[:2000])
+            if response.status_code != 200:
+                print(f"[-] DataCenter Block ჯერ კიდევ ძალაშია სტატუსით {response.status_code}! ინახება Error")
+                with open(f"API_Error_{page}.html", "w", encoding="utf-8") as f:
+                    f.write(response.text[:2000])
                 continue
-                
-            raw_json = req.json()
             
-            # მოდი მოვძებნოთ მანქანების სია:
-            items_list = search_main_list(raw_json)
-            if not items_list:
-                print("[-] JSON კოდში სიას ვერ ვპოულობ!")
-                continue
-                
-            print(f"[✔] ოპერაცია წარმატებულია! {current_page} გვერდზე ამოკითხულია {len(items_list)} დაფარული მანქანის ერთეული.")
+            data = response.json()
+            extracted_list = auto_find_list(data)
             
-            # ჩაწყობა საერთო საცავში "დაუთოვებული" ერთეულებით (Dictionary flatten):
-            for itm in items_list:
-                database.append(dict_flatten(itm))
+            if extracted_list:
+                print(f"[✔] გადმოიტვირთა {len(extracted_list)} სუფთა ინფორმაციის კომპონენტი!")
+                for obj in extracted_list:
+                    all_cars_database.append(flatten_dict(obj))
+            else:
+                print("[-] მონაცემების სიას ამ გვერდზე ვერ მიაგნო. ციკლი ჩერდება.")
+                break
                 
-            time.sleep(2) 
+            time.sleep(2)
             
-        except Exception as error_msg:
-            print(f"[X] ვაახ შეცდომა გამოვარდა კავშირზე: {error_msg}")
+        except Exception as e:
+            print(f"[X] მოხდა გადაჭრის პრობლემა: {e}")
             break
-
+            
     print("------------------------------------------")
-    if database:
-        print(f"😎 გადანაცვლებულია სულ {len(database)} საუკეთესო ინფორმაცია JSON->CSV !!")
+    if all_cars_database:
+        # გადააქცევს სუფთა ცხრილად!
+        keys = set()
+        for doc in all_cars_database: keys.update(doc.keys())
+        field_headers = sorted(list(keys))
         
-        # 1. ამოვწეროთ ყველა სხვადასხვა სათაური ერთობლივად სვეტების შესაქმნელად.
-        cols = set()
-        for c in database: cols.update(c.keys())
-        all_cols = sorted(list(cols))
+        with open("Results_Cars.csv", "w", newline="", encoding="utf-8") as f_csv:
+            w = csv.DictWriter(f_csv, fieldnames=field_headers)
+            w.writeheader()
+            w.writerows(all_cars_database)
         
-        # 2. ინახავს Csv Excel ფორმატში..
-        with open("Full_Data_API_Extraction.csv", "w", newline="", encoding="utf-8") as fcsv:
-            csv_writter = csv.DictWriter(fcsv, fieldnames=all_cols)
-            csv_writter.writeheader()
-            csv_writter.writerows(database)
+        # ბექაფი და შენახვა ლოგების
+        with open("raw_logs.json", "w", encoding="utf-8") as fb:
+            json.dump(all_cars_database, fb, indent=2, default=str)
             
-        # 3. ვაკეთებთ აგრეთვე DataBackup-ს (მშრალ Raw-json ლოგებს ინსპექტირებისთვის)!
-        with open("Raw_API_Backup.json", "w", encoding="utf-8") as fbup:
-            json.dump(database, fbup, indent=4, default=str)
-            
-        print("📁 ამოიღეთ არტიფაქტებიდან 'Full_Data_API_Extraction.csv' გთხოვთ!")
+        print(f"[$$] ბრწყინვალეა! გადამოწმებულია და CSV შეიქმნა: {len(all_cars_database)} ჩანაწერი.")
     else:
-        print("ფაილი ცარიელია! მოხდა გაუგებრობა ბლოკის ან ინფორმაციის არქონის გამო.")
-
+        print("[!] შეფერხდა 403 DataCenter ბლოკირების გამო - დანარჩენ ერორები შეინახება Zip ფაილში.")
 
 if __name__ == "__main__":
     main()
