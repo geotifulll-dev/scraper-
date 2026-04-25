@@ -1,118 +1,118 @@
 import csv
+import json
 import time
-import re
-from bs4 import BeautifulSoup
-# !! requests ბიბლიოთეკას ვცვლით სპეციალური chrome ბიბლიოთეკით
 from curl_cffi import requests
 
-def get_page_url(page):
-    if page == 1:
-        return "https://www.autowini.com/search/items?itemType=cars&condition=C020"
-    return f"https://www.autowini.com/search/items?itemType=cars&condition=C020&pageOffset={page}"
+# ის header-ები (პასპორტები) 1:1, რომლებიც შენ თვითონ გადმოიწერე ქრომის API Network-იდან. 
+# ასე შენი კოდი ოფიციალურ Chrome ბრაუზერს დაემსგავსა!
+HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9,de;q=0.8,tr;q=0.7",
+    "Origin": "https://www.autowini.com",
+    "Referer": "https://www.autowini.com/",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OPR/129.0.0.0",
+    "wini-code-select-country": "C0610",
+    "Connection": "keep-alive"
+}
 
-def extract_cars_from_html(html):
-    soup = BeautifulSoup(html, "html.parser")
-    cars =[]
-    
-    links = soup.find_all("a", href=re.compile(r"/items/Used-"))
-    for link in links:
-        car = {}
-        car["url"] = "https://www.autowini.com" + link.get("href", "")
+def dict_flatten(dict_obj, separator='_', prefix=''):
+    """საიდუმლო ფუნქცია: თუ API სერვერმა რთული JSON მოგვცა თავისი სუბ-კატეგორიებით 
+    (მაგ: price: {base: 600, exchange: 400}), ეს კოდი აქცევს price_base და price_exchange ფორმატში, 
+    რომ პირდაპირ Excel ცხრილში დაეტევეს და ინფორმაცია არ დავკარგოთ!"""
+    if not isinstance(dict_obj, dict):
+        return {prefix: dict_obj}
         
-        h3 = link.find("h3")
-        if h3:
-            n_span = h3.find("span")
-            if n_span:
-                n_span.decompose()
-            car["title"] = h3.get_text(strip=True)
+    flat_dictionary = {}
+    for key, value in dict_obj.items():
+        new_key = f"{prefix}{separator}{key}" if prefix else key
+        if isinstance(value, dict):
+            flat_dictionary.update(dict_flatten(value, separator, new_key))
+        elif isinstance(value, list):
+            flat_dictionary[new_key] = str(value)
         else:
-            car["title"] = "N/A"
-            
-        p = link.find("p")
-        car["details"] = p.get_text(strip=True) if p else "N/A"
-        
-        price = link.find("exchanged-price")
-        car["price"] = price.get("price", "N/A") if price else "N/A"
-        
-        flag = link.find("img", alt="flag")
-        if flag and flag.find_next_sibling("span"):
-            car["location"] = flag.find_next_sibling("span").get_text(strip=True)
-        else:
-            car["location"] = "N/A"
-            
-        wish_btn = link.find("button", attrs={"aria-label": "Add to wishlist button"})
-        if wish_btn and wish_btn.find_next_sibling("span"):
-            car["wishlist"] = wish_btn.find_next_sibling("span").get_text(strip=True)
-        else:
-            car["wishlist"] = "0"
-            
-        mk_icon = link.find("img", alt="mk_faster")
-        if mk_icon:
-            extra_div = mk_icon.find_next_sibling("div")
-            if extra_div:
-                features =[span.get_text(strip=True) for span in extra_div.find_all("span") if span.get_text(strip=True)]
-                car["features"] = " / ".join(features)
-            else:
-                car["features"] = "N/A"
-        else:
-            car["features"] = "N/A"
-            
-        cars.append(car)
-        
-    return cars
+            flat_dictionary[new_key] = value
+    return flat_dictionary
 
-def save_to_csv(cars, filename="results.csv"):
-    if not cars:
-        return
-    with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=cars[0].keys())
-        writer.writeheader()
-        writer.writerows(cars)
-    print(f"✅ წამოიღო და ჩაიწერა სულ: {len(cars)} მანქანა.")
+def search_main_list(data_chunk):
+    """საიდუმლო ლოგიკა #2: ჩვენ არ ვიცით რა დაარქვეს სერვერზე 'მანქანების სიას', (Cars? Items? data?), 
+    ამიტომ ეს ლოგიკა თვითონ ეძებს JSON შიგნეულობაში [List] საცავს (საიდანაც ინფორმაციაა)"""
+    if isinstance(data_chunk, list) and len(data_chunk) > 0 and isinstance(data_chunk[0], dict):
+        return data_chunk
+    if isinstance(data_chunk, dict):
+        for val in data_chunk.values():
+            found = search_main_list(val)
+            if found: return found
+    return[]
+
 
 def main():
-    print("🔥" * 20)
-    print("!!! ეშვება BYPASS-VER-02 ბოლო მეთოდი ქრომის ემულატორით !!!")
-    print("🔥" * 20)
+    print("🔥===========================================🔥")
+    print("API ბაზაზე (ბექ-ენდ) შეერთება წამოწყებულია!!!")
+    print("🔥===========================================🔥")
     
+    # ამოვიღოთ 2 გვერდის ინფორმაცია (თითო 30 მანქანაა ლინკზე მითითებული). შეიცვლება მარტივად..
     MAX_PAGES = 2 
-    all_extracted_cars =[]
+    database =[]
     
-    for page in range(1, MAX_PAGES + 1):
-        target_url = get_page_url(page)
-        print(f"[\u2193] ვამოწმებ გვერდს #{page}...")
+    for current_page in range(1, MAX_PAGES + 1):
+        # ეს ის ოფიციალური API საიდუმლო ლინკია რომელიც მიაგენი:
+        api_link = f"https://v2api.autowini.com/items/cars?pageOffset={current_page}&pageSize=30&condition=C020"
+        
+        print(f"[⬇] ჩამოგვაქვს გვერდი {current_page} პირდაპირ სერვერიდან ...")
         
         try:
-            # მთავარი მომენტი (ანტი-ბოტ საწინააღმდეგო იმპერსონაცია Chrome ვერსია 120-ის იმიტირებით)
-            resp = requests.get(target_url, impersonate="chrome120", timeout=30)
+            # ქრომის ინდიკაცია impersonate-ით.
+            req = requests.get(api_link, headers=HEADERS, impersonate="chrome120", timeout=25)
             
-            if resp.status_code != 200:
-                print(f"[-] საიტმა კვლავ დაბლოკა, დააბრუნა კოდი: {resp.status_code}")
-                with open("debug_html.txt", "w", encoding="utf-8") as f:
-                    f.write(resp.text[:5000])
-                break
+            if req.status_code != 200:
+                print(f"[-] ვუი! API-მ სტატუსი {req.status_code} დაგვიბრუნა. ველოდებით HTML პასუხს ბექაფში.")
+                with open(f"fail_page_{current_page}.html", "w", encoding="utf-8") as file:
+                    file.write(req.text[:2000])
+                continue
                 
-            page_cars = extract_cars_from_html(resp.text)
-            print(f"[+] გვერდზე იპოვნა: {len(page_cars)} ცალი მანქანა")
+            raw_json = req.json()
             
-            if not page_cars:
-                with open("debug_html.txt", "w", encoding="utf-8") as f:
-                    f.write(resp.text[:5000])
-                break
+            # მოდი მოვძებნოთ მანქანების სია:
+            items_list = search_main_list(raw_json)
+            if not items_list:
+                print("[-] JSON კოდში სიას ვერ ვპოულობ!")
+                continue
                 
-            all_extracted_cars.extend(page_cars)
-            time.sleep(3) 
+            print(f"[✔] ოპერაცია წარმატებულია! {current_page} გვერდზე ამოკითხულია {len(items_list)} დაფარული მანქანის ერთეული.")
             
-        except Exception as e:
-            print(f"[!] შეცდომა: {e}")
+            # ჩაწყობა საერთო საცავში "დაუთოვებული" ერთეულებით (Dictionary flatten):
+            for itm in items_list:
+                database.append(dict_flatten(itm))
+                
+            time.sleep(2) 
+            
+        except Exception as error_msg:
+            print(f"[X] ვაახ შეცდომა გამოვარდა კავშირზე: {error_msg}")
             break
 
-    print("=" * 50)
-    if all_extracted_cars:
-        print(f"[#] მისია შესრულებულია! სრული რაოდენობა: {len(all_extracted_cars)} ჩანაწერი.")
-        save_to_csv(all_extracted_cars, "results.csv")
+    print("------------------------------------------")
+    if database:
+        print(f"😎 გადანაცვლებულია სულ {len(database)} საუკეთესო ინფორმაცია JSON->CSV !!")
+        
+        # 1. ამოვწეროთ ყველა სხვადასხვა სათაური ერთობლივად სვეტების შესაქმნელად.
+        cols = set()
+        for c in database: cols.update(c.keys())
+        all_cols = sorted(list(cols))
+        
+        # 2. ინახავს Csv Excel ფორმატში..
+        with open("Full_Data_API_Extraction.csv", "w", newline="", encoding="utf-8") as fcsv:
+            csv_writter = csv.DictWriter(fcsv, fieldnames=all_cols)
+            csv_writter.writeheader()
+            csv_writter.writerows(database)
+            
+        # 3. ვაკეთებთ აგრეთვე DataBackup-ს (მშრალ Raw-json ლოგებს ინსპექტირებისთვის)!
+        with open("Raw_API_Backup.json", "w", encoding="utf-8") as fbup:
+            json.dump(database, fbup, indent=4, default=str)
+            
+        print("📁 ამოიღეთ არტიფაქტებიდან 'Full_Data_API_Extraction.csv' გთხოვთ!")
     else:
-        print("ინფორმაცია ვერსაიდან ვერ მოგროვდა.")
+        print("ფაილი ცარიელია! მოხდა გაუგებრობა ბლოკის ან ინფორმაციის არქონის გამო.")
+
 
 if __name__ == "__main__":
     main()
