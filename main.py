@@ -13,7 +13,6 @@ def flatten_dict(d, parent_key='', sep='_'):
         if isinstance(v, dict):
             items.extend(flatten_dict(v, new_key, sep=sep).items())
         elif isinstance(v, list):
-            # ლისტი გროვდება 1 უჯრაში მარტივი გამოსაყოფით ( | )
             str_list =[str(i) for i in v if not isinstance(i, (dict, list))]
             if str_list:
                 items.append((new_key, " | ".join(str_list)))
@@ -22,7 +21,7 @@ def flatten_dict(d, parent_key='', sep='_'):
     return dict(items)
 
 def auto_find_list(node):
-    # პოულობს მანქანების Array სიას პირველი ეტაპისთვის
+    # პოულობს მანქანების Array სიას
     if isinstance(node, list): return node
     if isinstance(node, dict):
         for val in node.values():
@@ -31,9 +30,7 @@ def auto_find_list(node):
     return[]
 
 def extract_target_car(node, target_id):
-    # დეტალებში სქელი ჯეისონიდან ფილტრავს სწორედ იმას, რომელიც გვირჩევნია!
     if isinstance(node, dict):
-        # ხანდახან დეტალურ გვერდზე 10 მსგავსი მანქანაა მოცემული "Similar Items" ბლოკში 
         if node.get("itemCd") == target_id:
             return node
         for val in node.values():
@@ -45,11 +42,51 @@ def extract_target_car(node, target_id):
             if result: return result
     return {}
 
+# 🟢 [ᲐᲮᲐᲚᲘ ᲤᲣᲜᲥᲪᲘᲐ]: პირდაპირ HTML ტეგებიდან მონაცემების ამოკითხვა პროდუქტის გვერდზე
+def scrape_visible_html_data(soup):
+    html_data = {}
+    
+    # 1. ძირითადი Title და ფარული OpenGraph ტეგები (სურათი, ფასი)
+    title_tag = soup.find('title')
+    if title_tag: html_data['PAGE_TITLE'] = title_tag.text.strip()
+    
+    og_img = soup.find('meta', property='og:image')
+    if og_img: html_data['MAIN_IMAGE'] = og_img.get('content', '')
+
+    meta_price = soup.find('meta', property='product:price:amount')
+    if meta_price: html_data['META_PRICE'] = meta_price.get('content', '')
+
+    # 2. ვიპოვოთ H1 (სავარაუდოდ მანქანის მთავარი დასახელება)
+    h1 = soup.find('h1')
+    if h1: html_data['HTML_H1_HEADING'] = h1.text.strip()
+    
+    # 3. დინამიურად ამოვიღოთ მონაცემები <dl>/<dt>/<dd> ტეგებიდან (თუ არის HTML-ში)
+    for dl in soup.find_all('dl'):
+        dts = dl.find_all('dt')
+        dds = dl.find_all('dd')
+        for dt, dd in zip(dts, dds):
+            key = dt.text.strip().replace(":", "").upper().replace(" ", "_")
+            val = dd.text.strip()
+            if key and val:
+                html_data[f"SPEC_DOM_{key}"] = val
+
+    # 4. ამოვიღოთ ცხრილის <tr>/<th>/<td> მონაცემები სპეციფიკაციებიდან
+    for tr in soup.find_all('tr'):
+        th = tr.find('th')
+        td = tr.find('td')
+        if th and td:
+            key = th.text.strip().replace(":", "").upper().replace(" ", "_")
+            val = td.text.strip()
+            if key and val:
+                html_data[f"TABLE_DOM_{key}"] = val
+                
+    return html_data
+
 
 def main():
-    print("🔥-----------------------------------------------🔥")
-    print(" 🚀 V2-API ➜ HYBRID DEEP CRAWLER: LIST -> DETAIL ")
-    print("🔥-----------------------------------------------🔥")
+    print("🔥---------------------------------------------------------🔥")
+    print(" 🚀 V2-API + HTML SCRAPE ➜ HYBRID CRAWLER: LIST -> DETAIL ")
+    print("🔥---------------------------------------------------------🔥")
 
     API_HEADERS = {
         "Accept": "application/json, text/plain, */*",
@@ -58,7 +95,7 @@ def main():
         "User-Agent": "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36",
         "Referer": "https://m.autowini.com/",
         "Origin": "https://m.autowini.com",
-        "wini-code-select-country": "C0610"
+        "wini-code-select-country": "C0610" # Country Code for example (Georgia)
     }
 
     DETAIL_HEADERS = {
@@ -68,15 +105,14 @@ def main():
     }
 
     MAX_PAGES = 2 
-    final_dataset = []
+    final_dataset =[]
 
     # [STEP 1] -> გვერდების ამოკითხვა სერვერული V2API საშუალებით
     for page in range(1, MAX_PAGES + 1):
         list_url = f"https://v2api.autowini.com/items/cars?pageOffset={page}&pageSize=30&condition=C020"
-        print(f"\n[➡] [STEP 1] ვეცნობი მთავარი V2API-ს სიას - ფურცელი #{page}")
+        print(f"\n[➡][STEP 1] ვეცნობი მთავარი V2API-ს სიას - ფურცელი #{page}")
         
         try:
-            # აქ API 100%-ით კარგად გადის მობილურის fake ჰედერთან ერთად 
             resp = c_req.get(list_url, headers=API_HEADERS, impersonate="safari_ios", timeout=20)
             if resp.status_code != 200:
                 print(f"[-] DataCenter-მა API კავშირიც დაბლოკა (Status {resp.status_code}).")
@@ -88,16 +124,14 @@ def main():
                 print(f"[-] ამ API გვერდზე ლისტი ცარიელია.")
                 continue
 
-            print(f"[✔] აღმოჩენილია {len(raw_cars)} ძირითადი ობიექტი! ➜ იწყება დეტალიზაცია სათითაოდ:")
+            print(f"[✔] აღმოჩენილია {len(raw_cars)} ობიექტი! ➜ იწყება HTML და დეტალური სკრაპინგი სათითაოდ:")
 
             #[STEP 2] სათითაოდ გავლის ციკლი ნაპოვნ ID-ებზე:
             for idx, raw_car_info in enumerate(raw_cars, 1):
                 car_id = raw_car_info.get("itemCd")
                 
-                # დავიცვათ მანქანა ლოგიკურად! 
                 base_flatten = flatten_dict(raw_car_info)
                 if not car_id:
-                    # თუ ID არ ჩანს რაიმე ერორის გამო, მაინც პირველადი API ინფო გროვდება!
                     final_dataset.append(base_flatten) 
                     continue
 
@@ -108,42 +142,55 @@ def main():
                     # ფარულად ჩაძვრომა კონკრეტული ავტომობილის დეტალების ტექსტებში
                     detail_resp = c_req.get(car_detail_link, headers=DETAIL_HEADERS, impersonate="chrome120", timeout=15)
                     deep_info_found = False
+                    visual_html_data = {} # შესანახი ცარიელი ობიექტი ვიზუალური დატასთვის
 
                     if detail_resp.status_code == 200:
                         detail_soup = BeautifulSoup(detail_resp.text, 'html.parser')
+                        
+                        # 🟢 ვაგროვებთ HTML/პროდუქტის გვერდზე ხილულ დატას (ჩვენი ახალი ფუნქცია)
+                        visual_html_data = scrape_visible_html_data(detail_soup)
+
                         next_script = detail_soup.find("script", id="__NEXT_DATA__")
                         
+                        # თუ არის ფარული მეგა JSON - ჯერ ამას ვიღებთ და მერე ვუმატებთ ვიზუალურ (HTML) დატას.
                         if next_script:
                             mega_json = json.loads(next_script.string)
                             exact_detail = extract_target_car(mega_json, car_id)
                             
                             if exact_detail:
-                                # თუ მივიღეთ სრული ინფორმაცია, ძველი ფასი/ლისტს წაშლის და დააწერს აბსოლუტურად ყველაფერს
                                 rich_car = flatten_dict(exact_detail)
                                 rich_car["LINK"] = car_detail_link
+                                
+                                # ვაერთიანებთ NextJSON და HTML მონაცემებს 
+                                rich_car.update(visual_html_data) 
+                                
                                 final_dataset.append(rich_car)
-                                print(f"      [⭐⭐⭐] წარმატება! სრულყოფილი NEXT მონაცემი დაუკავშირდა!")
+                                print(f"      [⭐⭐⭐] წარმატება! სრულყოფილი NEXT-JSON & HTML მონაცემი გაერთიანდა!")
                                 deep_info_found = True
 
                     # ----------------- FAIL-SAFE LOGIC --------------------
                     if not deep_info_found:
-                        print(f"      [~] დაცვის მექანიზმით მხოლოდ API მონაცემით შეივსო! (Deep Details Failed)")
+                        print(f"      [~] NEXT-JSON ვერ ვიპოვე. ავიღე API-ს ბაზა + HTML Scraping.")
                         base_flatten["LINK"] = car_detail_link
+                        
+                        # მაინც ვუმატებთ იმას რაც HTML ტეგებიდან მოვქექეთ
+                        if visual_html_data:
+                            base_flatten.update(visual_html_data) 
+                            
                         final_dataset.append(base_flatten)
 
                 except Exception as loop_e:
-                    print(f"[x] პატარა Timeout/ერორი მანქანაზე. (ვინახავ Base ინფორმაციას) - {loop_e}")
+                    print(f"[x] Timeout/ერორი მანქანაზე. ვიყენებ მხოლოდ API-ს. - {loop_e}")
                     base_flatten["LINK"] = f"https://www.autowini.com/items/Used-{car_id}"
                     final_dataset.append(base_flatten)
 
-                # სერვერზე არ ვაწვებით ძალიან, მანქანიდან-მანქანამდე თვლემს
                 time.sleep(1)  
 
         except Exception as api_err:
             print(f"[!] მთავარი გვერდის API ERROR: {api_err}")
 
 
-    # [STEP 3] ამოწეროს ყველაფერი
+    # [STEP 3] მონაცემების შენახვა CSV-ში
     print("\n------------------------------------------")
     if final_dataset:
         cols_set = set()
@@ -151,11 +198,11 @@ def main():
             cols_set.update(i.keys())
         all_cols = sorted(list(cols_set))
 
-        with open("Cars_Ultimate_Data.csv", "w", newline="", encoding="utf-8-sig") as csv_file:
-            wr = csv.DictWriter(csv_file, fieldnames=all_cols)
+        with open("Cars_Ultimate_Data_Scraped.csv", "w", newline="", encoding="utf-8-sig") as csv_file:
+            wr = csv.DictWriter(csv_file, fieldnames=all_cols, restval='')
             wr.writeheader()
             wr.writerows(final_dataset)
-        print(f"[#] შესანიშნავია! სრული პროცესი დასრულდა: {len(final_dataset)} ერთეული მყარად ჩაწერილია!")
+        print(f"[#] სრული პროცესი დასრულდა! HTML დატაც ჩაიტვირთა. ჩაწერილია: {len(final_dataset)} ერთეული.")
     else:
         print("[!] ლისტი აბსოლუტურად ცარიელია.")
 
