@@ -27,31 +27,16 @@ def auto_find_list(node):
             if found: return found
     return[]
 
-def extract_target_car(node, target_id):
-    if isinstance(node, dict):
-        if node.get("itemCd") == target_id:
-            return node
-        for val in node.values():
-            result = extract_target_car(val, target_id)
-            if result: return result
-    elif isinstance(node, list):
-        for item in node:
-            result = extract_target_car(item, target_id)
-            if result: return result
-    return {}
-
-
-# 🟢 HTML დან ზუსტი სტრუქტურის ამოკითხვა შენი გამოგზავნილი მონაცემებით
+# 🟢 HTML-ის გაფილტვრა (უშუალოდ მოწოდებული ტეგებიდან)
 def scrape_specific_html_data(soup):
     html_data = {}
     
-    # 1. Main Title
+    # 1. ძირითადი სახელი
     h1_title = soup.find('h1')
     if h1_title: html_data['CAR_TITLE'] = h1_title.text.strip()
     
-    # 2. Photos (მხოლოდ HD და მაღალი რეზოლუციის სურათების ლინკები " | "-ით გამოყოფილი)
+    # 2. დიდი გაფართოების ഫოტოები
     photo_urls =[]
-    # HTML კოდის მიხედვით "data-original-url" შეიცავს Full Res-ს!
     for img_tag in soup.find_all('a', attrs={'data-original-url': True}):
         p_url = img_tag.get('data-original-url', '')
         if p_url and p_url not in photo_urls:
@@ -59,26 +44,22 @@ def scrape_specific_html_data(soup):
     if photo_urls:
         html_data['GALLERY_PHOTOS_ALL'] = " | ".join(photo_urls)
 
-    # 3. Basic Info, Size, Odometer და Condition Status 
-    # ვეძებთ ნებისმიერ <dl>-ს რომელიც Basic Information და StatusReport შია
+    # 3. Basic & Status info <dt>/<dd> ტეგებიდან
     for dl in soup.find_all('dl'):
         dt = dl.find('dt')
         dd = dl.find('dd')
         if dt and dd:
-            # გავაკეთოთ ველის სახელი დიდი ასოებით Excel-სთვის (მაგ: BASIC_ODOMETER_READING)
             raw_key = dt.text.strip().replace(':', '').replace(' / ', '_').replace(' ', '_').upper()
             key_name = f"BASIC__{raw_key}"
             
-            # გავფილტროთ DD-დან დახმარების ToolTip-ები რაც HTML ში იყო დამალული
             for tooltip in dd.find_all(['div', 'a', 'span'], class_=['popTip', 'btnTip']):
-                tooltip.decompose() # იშლება HTML-დან ზედმეტი გაფრთხილების ტექსტები, ტოვებს რეალურ დატას (მაგ:"Not actual")
+                tooltip.decompose() # შლის საინფორმაციო ბუშტების ტექსტებს HTML-იდან
                 
-            # ვწმინდავთ ტექსტებს აბზაცებისგან 
             val_cleaned = ' '.join(dd.text.split())
             if val_cleaned and raw_key:
                 html_data[key_name] = val_cleaned
 
-    # 4. Featured Information (რენტა იყო? დაიტბორა? ნატაქსავებია? "YES/NO")
+    # 4. Featured Information ("წყალდიდობა, ნაქირავები და ა.შ" NO/YES ველები)
     featured_div = soup.find('ul', class_='special')
     if featured_div:
         for li in featured_div.find_all('li'):
@@ -89,7 +70,7 @@ def scrape_specific_html_data(soup):
                 val_f = f_val_tag.text.strip()
                 html_data[key_f] = val_f
 
-    # 5. Options (შესაძლებლობების სიის ერთ დიდ უჯრაში გადაბმა მაგალითად: Airbag | Power Seat | Sunroof ...)
+    # 5. მანქანის კომპლექტაციები (Airbags, Sunroof ...)
     options_container = soup.find('div', class_='optionInfo')
     options_collected =[]
     if options_container:
@@ -100,16 +81,13 @@ def scrape_specific_html_data(soup):
     if options_collected:
         html_data['INTERNAL_EXTERIOR_OPTIONS'] = " | ".join(options_collected)
 
-    # 6. Import Rules
+    # 6. Import Information (კონტეინერის/ტვირთვის სტატუსები)
     import_guide = soup.find('div', class_='import')
     if import_guide:
-        # Import გაფრთხილებების ერთ უჯრაში შეკვრა (LHD Allowed, 6Years Age და ა.შ)
         rule_list =[sp.text.strip() for sp in import_guide.find_all(['span'])]
         html_data['IMPORT_GUIDE'] = " | ".join(rule_list)
 
     return html_data
-
-
 
 def main():
     print("🔥---------------------------------------------------------🔥")
@@ -120,10 +98,7 @@ def main():
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
         "Connection": "keep-alive",
-        "User-Agent": "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36",
-        "Referer": "https://m.autowini.com/",
-        "Origin": "https://m.autowini.com",
-        "wini-code-select-country": "C0610" 
+        "User-Agent": "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36"
     }
 
     DETAIL_HEADERS = {
@@ -132,8 +107,7 @@ def main():
         "Upgrade-Insecure-Requests": "1"
     }
 
-    # !! დააყენე სასურველი რაოდენობა !!
-    MAX_PAGES = 1 
+    MAX_PAGES = 1 #[შეცვალე თუ ბევრი გინდა]
     final_dataset =[]
 
     for page in range(1, MAX_PAGES + 1):
@@ -146,60 +120,53 @@ def main():
             raw_cars = auto_find_list(resp.json())
             
             if not raw_cars: continue
-            print(f"   [✔] ამ გვერდზე ავიღეთ {len(raw_cars)} მანქანა. მივყვები მათზე ღრმა ამოკითხვას:")
+            print(f"   [✔] ამ გვერდზე აღმოჩნდა {len(raw_cars)} მანქანა. ვიწყებ შიდა გვერდების დასკანერებას:")
 
             for idx, raw_car_info in enumerate(raw_cars, 1):
-                car_id = raw_car_info.get("itemCd")
-                
-                # ვიტოვებთ სერვერის API მონაცემებს "Backup"-ად
+                # !!! მთავარი შესწორება !!! : ვიყენებთ პირდაპირ 'detailUrl' პარამეტრს API-დან 
+                detail_path = raw_car_info.get("detailUrl", "")
+                item_cd = raw_car_info.get("listingId", "NoID")
+
                 combined_dict = flatten_dict(raw_car_info)
                 
-                if not car_id:
+                # თუ ლინკი რაიმე მიზეზით არ დევს 
+                if not detail_path:
                     final_dataset.append(combined_dict) 
                     continue
 
-                car_detail_link = f"https://www.autowini.com/items/Used-{car_id}"
+                # სწორად ავაწყოთ პროდუქტის შიდა ბმული
+                car_detail_link = f"https://www.autowini.com{detail_path}"
                 combined_dict["PRODUCT_LINK"] = car_detail_link
                 
-                print(f"[{idx}/{len(raw_cars)}] იჩხრიკება: ID-{car_id} ...", end=" ")
+                print(f"[{idx}/{len(raw_cars)}] იჩხრიკება: {item_cd} ...", end=" ", flush=True)
                 
                 try:
-                    # ჩავალთ უშუალოდ HTML გვერდზე!
+                    # ჩავდივართ უშუალოდ HTML შიდა გვერდზე
                     detail_resp = c_req.get(car_detail_link, headers=DETAIL_HEADERS, impersonate="chrome120", timeout=15)
 
                     if detail_resp.status_code == 200:
                         detail_soup = BeautifulSoup(detail_resp.text, 'html.parser')
                         
-                        # 🟢 ვაგროვებთ HTML ვიზუალურ ფოტოებს/specებს შენი 5-ივე პუნქტიდან!
+                        # მოგვაქვს ჩვენი კერძო ინფორმაცია
                         specific_html_features = scrape_specific_html_data(detail_soup)
                         
-                        # 🟢 შემდეგ ვეძებთ ასევე NEXT ფარულ JSON-ს და თუ აქვს ეგეც მოგვაქვს:
-                        next_script = detail_soup.find("script", id="__NEXT_DATA__")
-                        if next_script:
-                            mega_json = json.loads(next_script.string)
-                            exact_detail = extract_target_car(mega_json, car_id)
-                            if exact_detail:
-                                json_extracted = flatten_dict(exact_detail)
-                                # 🟢 თუ JSON ვიპოვეთ, მთავარ combined_dict-ს ვანახლებთ:
-                                combined_dict.update(json_extracted)
-                        
-                        # 🟢 HTML-დან აღებულ ინფორმაციას აუცილებლად ვუმატებთ ყველა სცენარში:
                         if specific_html_features:
                             combined_dict.update(specific_html_features)
-                            
-                        print("✅ დაასრულა.")
+                            print("✅ HTML მონაცემები ამოღებულია!")
+                        else:
+                            print("⚠ გვერდი გაიხსნა, მაგრამ Data ვერ მოიძებნა.")
 
                     else:
-                        print("⚠️ [STATUS ER]")
+                        print(f"⚠[Error: URL ვერ ჩაიტვირთო {detail_resp.status_code}]")
                 
                 except Exception as loop_e:
-                    print("❌ [TimeOut/ER]")
+                    print("❌ [TimeOut/ER - ვიტოვებ ძირითად დატას]")
 
                 final_dataset.append(combined_dict)
-                time.sleep(1) # დასვენება 1 წამი სერვერის გადატვირთვის თავიდან ასაცილებლად
+                time.sleep(1) # მსუბუქად შევისვენოთ, რომ სერვერმა Bot არ გვეგონოს
 
         except Exception as e:
-            print(f"[!] მთავარი ერორი {e}")
+            print(f"[!] მთავარი გვერდის ჩატვირთვის ერორი {e}")
 
 
     print("\n------------------------------------------")
@@ -207,15 +174,15 @@ def main():
         cols_set = set()
         for i in final_dataset:
             cols_set.update(i.keys())
-        all_cols = sorted(list(cols_set)) # ვაქცევთ EXCEL/CSV ჰედერებად
+        all_cols = sorted(list(cols_set)) # ავტომატურად ალაგებს ყველა Keys ალფაბეტურად
 
-        with open("Cars_Ultimate_Custom_Extracted.csv", "w", newline="", encoding="utf-8-sig") as csv_file:
+        with open("Cars_Ultimate_Data_Scraped.csv", "w", newline="", encoding="utf-8-sig") as csv_file:
             wr = csv.DictWriter(csv_file, fieldnames=all_cols, restval='')
             wr.writeheader()
             wr.writerows(final_dataset)
-        print(f"🥳 პროცესი დაგვირგვინდა: {len(final_dataset)} ერთეული დეტალური ინფორმაცია ჩაწერილია 'Cars_Ultimate_Custom_Extracted.csv'-ში!")
+        print(f"🥳 სრულყოფილი! პროცესი დასრულდა, {len(final_dataset)} ერთეული მყარად ჩაწერილია Excel / CSV ဖაილში!")
     else:
-        print("[!] ლისტი აბსოლუტურად ცარიელია.")
+        print("[!] სია ცარიელია.")
 
 if __name__ == "__main__":
     main()
